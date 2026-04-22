@@ -23,6 +23,7 @@ export default function Login() {
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
+      router.replace('/(main)');
     } catch (err) {
       setError('Invalid email or password');
     } finally {
