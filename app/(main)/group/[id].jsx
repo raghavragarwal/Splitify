@@ -1,16 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity,
-  StyleSheet, ActivityIndicator, TextInput,
-  Modal, ScrollView
+  StyleSheet, ActivityIndicator, TextInput, Modal
 } from 'react-native';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import {
-  collection, addDoc, onSnapshot,
-  query, orderBy, doc, getDoc
+  collection, addDoc, onSnapshot, updateDoc,
+  query, orderBy, doc, getDoc, arrayUnion,
+  where, getDocs
 } from 'firebase/firestore';
 import { db } from '../../../lib/firebase';
 import { useAuth } from '../../../context/AuthContext';
+import { getExchangeRates } from '../../../lib/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import ExpenseCard from '../../../components/ExpenseCard';
 
 export default function GroupDetail() {
   const { id } = useLocalSearchParams();
@@ -25,19 +28,38 @@ export default function GroupDetail() {
   const [amount, setAmount] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
+  const [rates, setRates] = useState(null);
+  const [currency, setCurrency] = useState('INR');
+  const [memberModal, setMemberModal] = useState(false);
+  const [memberEmail, setMemberEmail] = useState('');
+  const [addingMember, setAddingMember] = useState(false);
+  const [memberError, setMemberError] = useState('');
+  const [memberSuccess, setMemberSuccess] = useState('');
 
   useEffect(() => {
-    const fetchGroup = async () => {
-      const docRef = doc(db, 'groups', id);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        const groupData = { id: docSnap.id, ...docSnap.data() };
-        setGroup(groupData);
-        navigation.setOptions({ title: groupData.name });
-      }
-    };
-    fetchGroup();
-  }, [id]);
+  const fetchGroup = async () => {
+    const docRef = doc(db, 'groups', id);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      const groupData = { id: docSnap.id, ...docSnap.data() };
+      setGroup(groupData);
+      navigation.setOptions({
+        title: groupData.name,
+        headerRight: () => (
+          <TouchableOpacity
+            onPress={() => setMemberModal(true)}
+            style={{ marginRight: 16 }}
+          >
+            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>
+              + Member
+            </Text>
+          </TouchableOpacity>
+        )
+      });
+    }
+  };
+  fetchGroup();
+}, [id]);
 
   useEffect(() => {
     const q = query(
@@ -54,6 +76,16 @@ export default function GroupDetail() {
     });
     return unsubscribe;
   }, [id]);
+
+  useEffect(() => {
+    const loadRatesAndCurrency = async () => {
+      const savedCurrency = await AsyncStorage.getItem('preferred_currency');
+      if (savedCurrency) setCurrency(savedCurrency);
+      const fetchedRates = await getExchangeRates();
+      setRates(fetchedRates);
+    };
+    loadRatesAndCurrency();
+  }, []);
 
   const getBalances = useCallback(() => {
     if (!expenses.length) return [];
@@ -105,34 +137,63 @@ export default function GroupDetail() {
     }
   }, [description, amount, group, user, id]);
 
-  const renderExpense = useCallback(({ item }) => {
-    const share = (item.amount / item.splitAmong.length).toFixed(2);
-    const isPaidByMe = item.paidBy === user.uid;
-    return (
-      <View style={styles.expenseCard}>
-        <View style={styles.expenseIcon}>
-          <Text style={styles.expenseIconText}>💰</Text>
-        </View>
-        <View style={styles.expenseInfo}>
-          <Text style={styles.expenseDesc}>{item.description}</Text>
-          <Text style={styles.expenseSub}>
-            {isPaidByMe ? 'You paid' : `${item.paidByName} paid`} · ₹{item.amount.toFixed(2)}
-          </Text>
-        </View>
-        <View style={styles.expenseRight}>
-          <Text style={isPaidByMe ? styles.amountGreen : styles.amountRed}>
-            {isPaidByMe ? '+' : '-'}₹{share}
-          </Text>
-          <Text style={styles.amountSub}>
-            {isPaidByMe ? 'you lent' : 'your share'}
-          </Text>
-        </View>
-      </View>
-    );
-  }, [user.uid]);
+  const handleAddMember = useCallback(async () => {
+  if (!memberEmail.trim()) {
+    setMemberError('Please enter an email');
+    return;
+  }
+  setAddingMember(true);
+  setMemberError('');
+  setMemberSuccess('');
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('email', '==', memberEmail.trim().toLowerCase()));
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      setMemberError('No user found with this email. They must sign up first.');
+      setAddingMember(false);
+      return;
+    }
+
+    const memberDoc = snapshot.docs[0];
+    const memberId = memberDoc.id;
+
+    if (group.members.includes(memberId)) {
+      setMemberError('This person is already in the group');
+      setAddingMember(false);
+      return;
+    }
+
+    await updateDoc(doc(db, 'groups', id), {
+      members: arrayUnion(memberId)
+    });
+
+    setMemberSuccess('Member added successfully!');
+    setMemberEmail('');
+  } catch (err) {
+    setMemberError('Failed to add member');
+  } finally {
+    setAddingMember(false);
+  }
+}, [memberEmail, group, id]);
+
+  const renderExpense = useCallback(({ item, index }) => (
+    <ExpenseCard
+      item={item}
+      userId={user.uid}
+      currency={currency}
+      rates={rates}
+      index={index}
+    />
+  ), [user.uid, currency, rates]);
 
   const balances = getBalances();
   const myBalance = balances.find(b => b.uid === user.uid);
+
+  const symbol = currency === 'INR' ? '₹'
+    : currency === 'USD' ? '$'
+    : currency === 'EUR' ? '€' : '£';
 
   return (
     <View style={styles.container}>
@@ -143,7 +204,9 @@ export default function GroupDetail() {
           {myBalance && (
             <View style={styles.balanceBanner}>
               <Text style={styles.balanceLabel}>You owe</Text>
-              <Text style={styles.balanceAmount}>₹{myBalance.owes.toFixed(2)}</Text>
+              <Text style={styles.balanceAmount}>
+                {symbol}{myBalance.owes.toFixed(2)}
+              </Text>
             </View>
           )}
 
@@ -224,6 +287,59 @@ export default function GroupDetail() {
           </View>
         </View>
       </Modal>
+      <Modal
+        visible={memberModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setMemberModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Add Member</Text>
+            <Text style={{ color: '#888', fontSize: 13, marginBottom: 16 }}>
+              They must already have a Splitify account
+            </Text>
+                
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Enter their email"
+              placeholderTextColor="#999"
+              value={memberEmail}
+              onChangeText={setMemberEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoFocus
+            />
+      
+            {memberError ? <Text style={styles.error}>{memberError}</Text> : null}
+            {memberSuccess ? (
+              <Text style={{ color: '#27ae60', fontSize: 13, marginBottom: 10 }}>
+                {memberSuccess}
+              </Text>
+            ) : null}
+      
+            <TouchableOpacity
+              style={styles.modalButton}
+              onPress={handleAddMember}
+              disabled={addingMember}
+            >
+              {addingMember
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={styles.modalButtonText}>Add Member</Text>
+              }
+            </TouchableOpacity>
+            
+            <TouchableOpacity onPress={() => {
+              setMemberModal(false);
+              setMemberEmail('');
+              setMemberError('');
+              setMemberSuccess('');
+            }}>
+              <Text style={styles.cancelText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -254,59 +370,6 @@ const styles = StyleSheet.create({
   },
   list: {
     padding: 16,
-  },
-  expenseCard: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  expenseIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#f0eeff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  expenseIconText: {
-    fontSize: 20,
-  },
-  expenseInfo: {
-    flex: 1,
-  },
-  expenseDesc: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  expenseSub: {
-    fontSize: 12,
-    color: '#888',
-    marginTop: 2,
-  },
-  expenseRight: {
-    alignItems: 'flex-end',
-  },
-  amountGreen: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#27ae60',
-  },
-  amountRed: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#e74c3c',
-  },
-  amountSub: {
-    fontSize: 11,
-    color: '#aaa',
-    marginTop: 2,
   },
   empty: {
     flex: 1,

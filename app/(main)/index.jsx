@@ -9,7 +9,7 @@ import { db } from '../../lib/firebase';
 import { useAuth } from '../../context/AuthContext';
 
 export default function Home() {
-  const { user } = useAuth();
+  const { user } = useAuth() || {};
   const router = useRouter();
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);

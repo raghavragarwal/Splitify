@@ -6,6 +6,8 @@ import {
 import { useRouter } from 'expo-router';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 
 export default function Signup() {
   const router = useRouter();
@@ -29,6 +31,11 @@ export default function Signup() {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(userCredential.user, { displayName: name });
+      await setDoc(doc(db, 'users', userCredential.user.uid), {
+        email: email.trim().toLowerCase(),
+        displayName: name.trim(),
+        createdAt: new Date(),
+      });
       router.replace('/(main)');
     } catch (err) {
       if (err.code === 'auth/email-already-in-use') {
