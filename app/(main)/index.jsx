@@ -9,16 +9,17 @@ import { db } from '../../lib/firebase';
 import { useAuth } from '../../context/AuthContext';
 
 export default function Home() {
-  const { user } = useAuth() || {};
+  const { user, loading } = useAuth();
   const router = useRouter();
   const [groups, setGroups] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [groupsLoading, setGroupsLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (!user) return;
     const q = query(
       collection(db, 'groups'),
       where('members', 'array-contains', user.uid)
@@ -29,10 +30,10 @@ export default function Home() {
         ...doc.data()
       }));
       setGroups(data);
-      setLoading(false);
+      setGroupsLoading(false);
     });
     return unsubscribe;
-  }, []);
+  }, [user]);
 
   const handleCreateGroup = useCallback(async () => {
     if (!groupName.trim()) {
@@ -56,7 +57,7 @@ export default function Home() {
     } finally {
       setCreating(false);
     }
-  }, [groupName, user.uid]);
+  }, [groupName, user]);
 
   const renderGroup = useCallback(({ item }) => (
     <TouchableOpacity
@@ -78,10 +79,18 @@ export default function Home() {
     </TouchableOpacity>
   ), []);
 
+  if (loading || !user) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#6C63FF" />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
 
-      {loading ? (
+      {groupsLoading ? (
         <ActivityIndicator size="large" color="#6C63FF" style={styles.loader} />
       ) : groups.length === 0 ? (
         <View style={styles.empty}>
